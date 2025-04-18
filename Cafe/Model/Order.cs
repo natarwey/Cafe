@@ -1,5 +1,6 @@
 ﻿using System;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace Cafe.Model
 {
@@ -14,14 +15,15 @@ namespace Cafe.Model
         [Required]
         public int WaiterId { get; set; }
 
-        [Required]
-        public DateTime OrderDate { get; set; }
+        public DateTime OrderDate { get; set; } // Убрали [Required], будет заполняться автоматически
 
-        [Required]
-        public decimal TotalAmount { get; set; }
+        public decimal TotalAmount { get; set; } // Убрали [Required], будет вычисляться
 
-        public Waiter Waiter { get; set; }
+        // Сделали свойство необязательным для валидации
+        [JsonIgnore]
+        public Waiter? Waiter { get; set; }
 
-        public ICollection<OrderItem> OrderItems { get; set; }
+        // Разрешили null и пустую коллекцию
+        public ICollection<OrderItem>? OrderItems { get; set; }
     }
 }

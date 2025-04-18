@@ -2,6 +2,7 @@
 using Cafe.Model;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.ComponentModel.DataAnnotations;
 
 namespace Cafe.Controllers
 {
@@ -41,6 +42,25 @@ namespace Cafe.Controllers
         [HttpPost]
         public async Task<ActionResult<Order>> PostOrder(Order order)
         {
+            // Проверяем существование официанта
+            if (!await _context.Waiters.AnyAsync(w => w.Id == order.WaiterId))
+                return BadRequest("Waiter not found");
+
+            // Устанавливаем дату и время
+            order.OrderDate = DateTime.Now;
+
+            // Инициализируем коллекцию, если её нет
+            order.OrderItems ??= new List<OrderItem>();
+
+            // Вычисляем общую сумму
+            var menuItemIds = order.OrderItems.Select(oi => oi.MenuItemId).ToList();
+            var menuItems = await _context.MenuItems
+                .Where(mi => menuItemIds.Contains(mi.Id))
+                .ToDictionaryAsync(mi => mi.Id);
+
+            order.TotalAmount = order.OrderItems.Sum(oi =>
+                menuItems.TryGetValue(oi.MenuItemId, out var mi) ? mi.Price * oi.Quantity : 0);
+
             _context.Orders.Add(order);
             await _context.SaveChangesAsync();
 
@@ -49,14 +69,38 @@ namespace Cafe.Controllers
 
         // PUT: api/Orders/5
         [HttpPut("{id}")]
-        public async Task<IActionResult> PutOrder(int id, Order order)
+        public async Task<IActionResult> PutOrder(int id, OrderUpdateDto orderUpdate)
         {
-            if (id != order.Id)
+            // Находим существующий заказ
+            var existingOrder = await _context.Orders
+                .Include(o => o.OrderItems)
+                .FirstOrDefaultAsync(o => o.Id == id);
+
+            if (existingOrder == null)
             {
-                return BadRequest();
+                return NotFound();
             }
 
-            _context.Entry(order).State = EntityState.Modified;
+            // Обновляем основные поля
+            existingOrder.TableNumber = orderUpdate.TableNumber;
+            existingOrder.WaiterId = orderUpdate.WaiterId;
+
+            // Обновляем позиции заказа
+            if (orderUpdate.OrderItems != null && orderUpdate.OrderItems.Any())
+            {
+                // Удаляем старые позиции
+                _context.OrderItems.RemoveRange(existingOrder.OrderItems);
+
+                // Добавляем новые
+                existingOrder.OrderItems = orderUpdate.OrderItems.Select(oi => new OrderItem
+                {
+                    MenuItemId = oi.MenuItemId,
+                    Quantity = oi.Quantity
+                }).ToList();
+            }
+
+            // Пересчитываем сумму
+            await UpdateOrderTotalAmount(existingOrder);
 
             try
             {
@@ -64,17 +108,53 @@ namespace Cafe.Controllers
             }
             catch (DbUpdateConcurrencyException)
             {
-                if (!_context.Orders.Any(e => e.Id == id))
+                if (!await OrderExists(id))
                 {
                     return NotFound();
                 }
-                else
-                {
-                    throw;
-                }
+                throw;
             }
 
             return NoContent();
+        }
+
+        // Вспомогательный метод для проверки существования заказа
+        private async Task<bool> OrderExists(int id)
+        {
+            return await _context.Orders.AnyAsync(e => e.Id == id);
+        }
+
+        // Вспомогательный метод для обновления суммы заказа
+        private async Task UpdateOrderTotalAmount(Order order)
+        {
+            var menuItemIds = order.OrderItems.Select(oi => oi.MenuItemId).ToList();
+            var menuItems = await _context.MenuItems
+                .Where(mi => menuItemIds.Contains(mi.Id))
+                .ToDictionaryAsync(mi => mi.Id);
+
+            order.TotalAmount = order.OrderItems
+                .Sum(oi => menuItems.TryGetValue(oi.MenuItemId, out var mi) ? mi.Price * oi.Quantity : 0);
+        }
+
+        public class OrderUpdateDto
+        {
+            [Required]
+            public int TableNumber { get; set; }
+
+            [Required]
+            public int WaiterId { get; set; }
+
+            public List<OrderItemUpdateDto> OrderItems { get; set; }
+        }
+
+        public class OrderItemUpdateDto
+        {
+            [Required]
+            public int MenuItemId { get; set; }
+
+            [Required]
+            [Range(1, int.MaxValue)]
+            public int Quantity { get; set; }
         }
 
         // DELETE: api/Orders/5
